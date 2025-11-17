@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  apache:
+    build: .
+    container_name: mod_domain_hash_test
+    ports:
+      - "8080:80"
+    volumes:
+      - ./mod_domain_hash.c:/build/mod_domain_hash.c:ro
+    environment:
+      - APACHE_LOG_DIR=/var/log/apache2
+    stdin_open: true
+    tty: true

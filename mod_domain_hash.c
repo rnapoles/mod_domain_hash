@@ -188,6 +188,15 @@ static int domain_hash_translate_name(request_rec *r)
         return HTTP_NOT_FOUND;
     }
     
+    /* Check if /public subdirectory exists and use it if available */
+    char *public_path = apr_pstrcat(r->pool, vhost_path, "/public", NULL);
+    if (directory_exists(public_path)) {
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                      "mod_domain_hash: Using public subdirectory: %s",
+                      public_path);
+        vhost_path = public_path;
+    }
+    
     /* Set the document root for this request */
     ap_set_document_root(r, vhost_path);
     

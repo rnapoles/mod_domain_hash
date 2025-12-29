@@ -50,10 +50,12 @@ echo ""
 echo "================================="
 echo "Checking Apache error log:"
 echo "================================="
-docker exec mod_domain_hash_test tail -n 30 /var/log/apache2/error.log
+tail -n 30 /var/log/apache2/error.log
 
 echo ""
 echo "================================="
 echo "Verifying directory structure:"
 echo "================================="
-docker exec mod_domain_hash_test find /var/www -type d -name "*.com" -o -name "*.org" | sort
+find /var/www -type d -name "*.com" -o -name "*.org" | sort
+
+

@@ -66,16 +66,44 @@ static const char *set_domain_hash_base(cmd_parms *cmd, void *dummy, const char 
     return NULL;
 }
 
+/* Check if string starts with prefix (safe version) */
+static int starts_with(const char *text, const char *prefix)
+{
+    size_t text_len, prefix_len;
+    
+    if (!text || !prefix) {
+        return 0;
+    }
+    
+    text_len = strlen(text);
+    prefix_len = strlen(prefix);
+    
+    /* Ensure text is at least as long as prefix */
+    if (text_len < prefix_len) {
+        return 0;
+    }
+    
+    return strncmp(text, prefix, prefix_len) == 0;
+}
+
 /* Generate SHA1 hash and create path */
 static char *generate_hash_path(apr_pool_t *pool, const char *base_path, const char *domain)
 {
     unsigned char hash[SHA_DIGEST_LENGTH];
     char hex[SHA_DIGEST_LENGTH * 2 + 1];
     char *path;
+    const char *clean_domain;
     int i;
     
+    /* Strip "www." prefix if present */
+    if (starts_with(domain, "www.")) {
+        clean_domain = domain + 4;  /* Skip "www." */
+    } else {
+        clean_domain = domain;
+    }
+    
     /* Calculate SHA1 hash */
-    SHA1((unsigned char *)domain, strlen(domain), hash);
+    SHA1((unsigned char *)clean_domain, strlen(clean_domain), hash);
     
     /* Convert first 7 bytes to hex */
     for (i = 0; i < 7; i++) {
@@ -88,7 +116,7 @@ static char *generate_hash_path(apr_pool_t *pool, const char *base_path, const c
                         base_path,
                         hex[0], hex[1], hex[2], hex[3],
                         hex[4], hex[5], hex[6],
-                        domain);
+                        clean_domain);
     
     return path;
 }

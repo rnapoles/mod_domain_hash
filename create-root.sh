@@ -20,3 +20,4 @@ fi
 
 mkdir -p "$ROOT"
 echo "Created: $ROOT"
+echo "<?php echo \$_SERVER['SERVER_NAME'] . PHP_EOL;" > $ROOT/index.php

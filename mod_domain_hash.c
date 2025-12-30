@@ -197,28 +197,18 @@ static int domain_hash_translate_name(request_rec *r)
         vhost_path = public_path;
     }
     
-    /* Get core configuration and update document root */
-    core_cfg = ap_get_core_module_config(r->per_dir_config);
-    core_cfg->ap_document_root = vhost_path;
-    
     /* Set the document root for this request */
     ap_set_document_root(r, vhost_path);
     
     /* Set environment variable */
     apr_table_set(r->subprocess_env, "VHOST_PATH", vhost_path);
     
-    /* Update the filename to be relative to new document root */
-    /* This is critical - we need to reconstruct the filename */
-    if (r->uri && r->uri[0] == '/') {
-        r->filename = apr_pstrcat(r->pool, vhost_path, r->uri, NULL);
-    } else {
-        r->filename = apr_pstrcat(r->pool, vhost_path, "/", r->uri, NULL);
-    }
-    
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
-                  "mod_domain_hash: Set filename to '%s'", r->filename);
+                  "mod_domain_hash: Set document root to '%s'", vhost_path);
     
-    return OK;
+    /* Return DECLINED to let Apache continue processing with the new document root
+     * This allows .htaccess and mod_rewrite to work properly */
+    return DECLINED;
 }
 
 /* Configuration directives */

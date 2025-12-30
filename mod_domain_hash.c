@@ -197,6 +197,10 @@ static int domain_hash_translate_name(request_rec *r)
         vhost_path = public_path;
     }
     
+    /* Get core configuration and update document root */
+    core_cfg = ap_get_core_module_config(r->per_dir_config);
+    core_cfg->ap_document_root = vhost_path;
+    
     /* Set the document root for this request */
     ap_set_document_root(r, vhost_path);
     

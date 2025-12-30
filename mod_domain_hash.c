@@ -203,11 +203,18 @@ static int domain_hash_translate_name(request_rec *r)
     /* Set environment variable */
     apr_table_set(r->subprocess_env, "VHOST_PATH", vhost_path);
     
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
-                  "mod_domain_hash: Set document root to '%s'", vhost_path);
+    /* Build the filename from document root + URI */
+    if (r->uri && r->uri[0] == '/') {
+        r->filename = apr_pstrcat(r->pool, vhost_path, r->uri, NULL);
+    } else {
+        r->filename = apr_pstrcat(r->pool, vhost_path, "/", r->uri, NULL);
+    }
     
-    /* Return DECLINED to let Apache continue processing with the new document root
-     * This allows .htaccess and mod_rewrite to work properly */
+    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                  "mod_domain_hash: Set document root to '%s', filename to '%s'", 
+                  vhost_path, r->filename);
+    
+    /* Return DECLINED to allow further processing (like .htaccess) */
     return DECLINED;
 }
 

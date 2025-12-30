@@ -210,12 +210,15 @@ static int domain_hash_translate_name(request_rec *r)
         r->filename = apr_pstrcat(r->pool, vhost_path, "/", r->uri, NULL);
     }
     
+    /* Set canonical filename for proper .htaccess processing */
+    r->canonical_filename = r->filename;
+    
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                   "mod_domain_hash: Set document root to '%s', filename to '%s'", 
                   vhost_path, r->filename);
     
-    /* Return DECLINED to allow further processing (like .htaccess) */
-    return DECLINED;
+    /* Return OK - we've completed the translation */
+    return OK;
 }
 
 /* Configuration directives */

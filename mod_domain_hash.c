@@ -131,6 +131,77 @@ static int directory_exists(const char *path)
     return 0;
 }
 
+/* Sanitize URI to prevent directory traversal attacks */
+static int is_safe_uri(const char *uri)
+{
+    const char *p;
+    
+    if (!uri || *uri == '\0') {
+        return 0;
+    }
+    
+    /* URI must start with / */
+    if (uri[0] != '/') {
+        return 0;
+    }
+    
+    /* Check for directory traversal patterns */
+    p = uri;
+    while (*p) {
+        /* Check for ../ or ..\ patterns */
+        if (p[0] == '.' && p[1] == '.') {
+            /* Check if followed by path separator or end of string */
+            if (p[2] == '/' || p[2] == '\\' || p[2] == '\0') {
+                return 0;
+            }
+            /* Check if preceded by path separator or start of string */
+            if (p == uri || p[-1] == '/' || p[-1] == '\\') {
+                return 0;
+            }
+        }
+        
+        /* Reject backslashes (Windows-style paths) */
+        if (*p == '\\') {
+            return 0;
+        }
+        
+        /* Reject null bytes */
+        if (*p == '\0') {
+            break;
+        }
+        
+        p++;
+    }
+    
+    return 1;
+}
+
+/* Verify that resolved path is within document root */
+static int is_path_within_root(const char *resolved_path, const char *doc_root)
+{
+    size_t root_len;
+    
+    if (!resolved_path || !doc_root) {
+        return 0;
+    }
+    
+    root_len = strlen(doc_root);
+    
+    /* Resolved path must start with document root */
+    if (strncmp(resolved_path, doc_root, root_len) != 0) {
+        return 0;
+    }
+    
+    /* If doc_root doesn't end with /, ensure next char is / or end of string */
+    if (doc_root[root_len - 1] != '/') {
+        if (resolved_path[root_len] != '/' && resolved_path[root_len] != '\0') {
+            return 0;
+        }
+    }
+    
+    return 1;
+}
+
 /* Translate name hook - this runs early and can modify the filename */
 static int domain_hash_translate_name(request_rec *r)
 {
@@ -203,11 +274,28 @@ static int domain_hash_translate_name(request_rec *r)
     /* Set environment variable */
     apr_table_set(r->subprocess_env, "VHOST_PATH", vhost_path);
     
+    /* Validate URI to prevent directory traversal attacks */
+    if (!is_safe_uri(r->uri)) {
+        ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                      "mod_domain_hash: Rejected unsafe URI: %s",
+                      r->uri);
+        return HTTP_FORBIDDEN;
+    }
+    
     /* Build the filename from document root + URI */
     if (r->uri && r->uri[0] == '/') {
         r->filename = apr_pstrcat(r->pool, vhost_path, r->uri, NULL);
     } else {
         r->filename = apr_pstrcat(r->pool, vhost_path, "/", r->uri, NULL);
+    }
+    
+    /* Verify the resolved path is within the document root */
+    if (!is_path_within_root(r->filename, vhost_path)) {
+        ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                      "mod_domain_hash: Path traversal attempt detected. "
+                      "Filename '%s' is outside document root '%s'",
+                      r->filename, vhost_path);
+        return HTTP_FORBIDDEN;
     }
     
     /* Set canonical filename for proper .htaccess processing */

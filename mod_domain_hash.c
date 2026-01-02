@@ -93,7 +93,17 @@ static char *generate_hash_path(apr_pool_t *pool, const char *base_path, const c
     char hex[SHA_DIGEST_LENGTH * 2 + 1];
     char *path;
     const char *clean_domain;
+    char *clean_base_path;
+    size_t base_len;
     int i;
+    
+    /* Remove trailing slash from base_path if present */
+    base_len = strlen(base_path);
+    if (base_len > 0 && base_path[base_len - 1] == '/') {
+        clean_base_path = apr_pstrndup(pool, base_path, base_len - 1);
+    } else {
+        clean_base_path = (char *)base_path;
+    }
     
     /* Strip "www." prefix if present */
     if (starts_with(domain, "www.")) {
@@ -113,7 +123,7 @@ static char *generate_hash_path(apr_pool_t *pool, const char *base_path, const c
     
     /* Build path: /var/www/7/7/6/0/5/7/1/domain.com */
     path = apr_psprintf(pool, "%s/%c/%c/%c/%c/%c/%c/%c/%s",
-                        base_path,
+                        clean_base_path,
                         hex[0], hex[1], hex[2], hex[3],
                         hex[4], hex[5], hex[6],
                         clean_domain);

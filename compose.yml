@@ -8,6 +8,8 @@ services:
       - "8080:80"
     volumes:
       - ./mod_domain_hash.c:/build/mod_domain_hash.c:ro
+      - ./var/sites/:/var/sites/
+      - ./var/www/:/var/www/
     environment:
       - APACHE_LOG_DIR=/var/log/apache2
     stdin_open: true

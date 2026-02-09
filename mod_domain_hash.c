@@ -7,7 +7,8 @@
  * 
  * Configuration in httpd.conf:
  * LoadModule domain_hash_module modules/mod_domain_hash.so
- * DomainHashBase /var/www
+ * DomainHashBase /var/sites/sites1
+ * DomainHashBase /var/sites/sites2
  * DomainHashEnable On
  */
 
@@ -24,9 +25,11 @@
 
 module AP_MODULE_DECLARE_DATA domain_hash_module;
 
+#define MAX_BASE_PATHS 16
+
 typedef struct {
     int enabled;
-    const char *base_path;
+    apr_array_header_t *base_paths;  /* Array of const char* base paths */
 } domain_hash_config;
 
 /* Create per-server configuration */
@@ -34,7 +37,7 @@ static void *create_domain_hash_server_config(apr_pool_t *pool, server_rec *s)
 {
     domain_hash_config *cfg = apr_pcalloc(pool, sizeof(domain_hash_config));
     cfg->enabled = 0;
-    cfg->base_path = "/var/www";
+    cfg->base_paths = apr_array_make(pool, 4, sizeof(const char *));
     return cfg;
 }
 
@@ -46,7 +49,15 @@ static void *merge_domain_hash_server_config(apr_pool_t *pool, void *base_conf, 
     domain_hash_config *cfg = apr_pcalloc(pool, sizeof(domain_hash_config));
     
     cfg->enabled = new->enabled ? new->enabled : base->enabled;
-    cfg->base_path = new->base_path ? new->base_path : base->base_path;
+    
+    /* Merge base_paths arrays: use new's paths if any, otherwise use base's */
+    if (new->base_paths && new->base_paths->nelts > 0) {
+        cfg->base_paths = apr_array_copy(pool, new->base_paths);
+    } else if (base->base_paths && base->base_paths->nelts > 0) {
+        cfg->base_paths = apr_array_copy(pool, base->base_paths);
+    } else {
+        cfg->base_paths = apr_array_make(pool, 4, sizeof(const char *));
+    }
     
     return cfg;
 }
@@ -62,7 +73,17 @@ static const char *set_domain_hash_enable(cmd_parms *cmd, void *dummy, int flag)
 static const char *set_domain_hash_base(cmd_parms *cmd, void *dummy, const char *arg)
 {
     domain_hash_config *cfg = ap_get_module_config(cmd->server->module_config, &domain_hash_module);
-    cfg->base_path = arg;
+    const char **new_path;
+    
+    /* Check if we've exceeded maximum base paths */
+    if (cfg->base_paths->nelts >= MAX_BASE_PATHS) {
+        return apr_psprintf(cmd->pool, "DomainHashBase: Maximum of %d base paths exceeded", MAX_BASE_PATHS);
+    }
+    
+    /* Add the new base path to the array */
+    new_path = apr_array_push(cfg->base_paths);
+    *new_path = arg;
+    
     return NULL;
 }
 
@@ -254,19 +275,39 @@ static int domain_hash_translate_name(request_rec *r)
         host_lower[i] = tolower((unsigned char)host_lower[i]);
     }
     
-    /* Generate hash-based path */
-    vhost_path = generate_hash_path(r->pool, cfg->base_path, host_lower);
+    /* Check if any base paths are configured */
+    if (!cfg->base_paths || cfg->base_paths->nelts == 0) {
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                      "mod_domain_hash: No base paths configured, declining");
+        return DECLINED;
+    }
     
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
-                  "mod_domain_hash: Host='%s' mapped to path='%s'",
-                  host_lower, vhost_path);
+    /* Try each base path in order until we find one that exists */
+    const char **paths = (const char **)cfg->base_paths->elts;
+    vhost_path = NULL;
     
-    /* Check if directory exists */
-    if (!directory_exists(vhost_path)) {
-        ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
-                      "mod_domain_hash: Directory does not exist: %s",
-                      vhost_path);
-        return HTTP_NOT_FOUND;
+    for (i = 0; i < cfg->base_paths->nelts; i++) {
+        char *candidate_path = generate_hash_path(r->pool, paths[i], host_lower);
+        
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                      "mod_domain_hash: Host='%s' trying path='%s'",
+                      host_lower, candidate_path);
+        
+        if (directory_exists(candidate_path)) {
+            vhost_path = candidate_path;
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                          "mod_domain_hash: Found matching directory at '%s'",
+                          vhost_path);
+            break;
+        }
+    }
+    
+    /* If no matching directory found in any base path, decline */
+    if (!vhost_path) {
+        ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                      "mod_domain_hash: No matching directory found for host '%s' in any base path, declining",
+                      host_lower);
+        return DECLINED;
     }
     
     /* Check if /public subdirectory exists and use it if available */

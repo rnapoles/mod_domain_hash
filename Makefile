@@ -1,12 +1,13 @@
 COMPOSE  = docker compose
 SERVICE  = apache
 CONTAINER = mod_domain_hash_test
+IMAGE    = rnapoles:mod_domain_hash
 
 # Enable BuildKit for cache-mount support (--mount=type=cache in Dockerfile)
 export DOCKER_BUILDKIT := 1
 export COMPOSE_DOCKER_CLI_BUILD := 1
 
-.PHONY: help build build-no-cache up down restart logs shell test reload status clean
+.PHONY: help build build-no-cache up down restart logs shell test reload status clean save
 
 ## Default 
 help:
@@ -14,6 +15,7 @@ help:
 	@echo "  mod_domain_hash – available targets"
 	@echo ""
 	@echo "  build          Build the Docker image (uses BuildKit layer cache)"
+	@echo "  save           Tag and save the image as $(IMAGE) to mod_domain_hash.tar"
 	@echo "  build-no-cache  Force a full rebuild, ignoring all caches"
 	@echo "  up       Start the container in detached mode"
 	@echo "  down     Stop and remove the container"
@@ -62,3 +64,9 @@ status:
 ## Cleanup 
 clean:
 	$(COMPOSE) down --rmi local --volumes --remove-orphans
+
+## Image export 
+save:
+	docker tag $(shell $(COMPOSE) images -q $(SERVICE)) $(IMAGE)
+	docker save $(IMAGE) -o mod_domain_hash.tar
+	@echo "Image saved to mod_domain_hash.tar as $(IMAGE)"

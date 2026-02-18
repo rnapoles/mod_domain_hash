@@ -5,7 +5,7 @@ services:
     build: .
     container_name: mod_domain_hash_test
     ports:
-      - "8080:80"
+      - "8085:80"
     volumes:
       - ./mod_domain_hash.c:/build/mod_domain_hash.c:ro
       - ./var/sites/:/var/sites/

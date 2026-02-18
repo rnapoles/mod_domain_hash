@@ -2,14 +2,19 @@ COMPOSE  = docker compose
 SERVICE  = apache
 CONTAINER = mod_domain_hash_test
 
-.PHONY: help build up down restart logs shell test reload status clean
+# Enable BuildKit for cache-mount support (--mount=type=cache in Dockerfile)
+export DOCKER_BUILDKIT := 1
+export COMPOSE_DOCKER_CLI_BUILD := 1
+
+.PHONY: help build build-no-cache up down restart logs shell test reload status clean
 
 ## Default 
 help:
 	@echo ""
 	@echo "  mod_domain_hash – available targets"
 	@echo ""
-	@echo "  build    Build (or rebuild) the Docker image"
+	@echo "  build          Build the Docker image (uses BuildKit layer cache)"
+	@echo "  build-no-cache  Force a full rebuild, ignoring all caches"
 	@echo "  up       Start the container in detached mode"
 	@echo "  down     Stop and remove the container"
 	@echo "  restart  Restart the container"
@@ -23,6 +28,9 @@ help:
 
 ## Lifecycle 
 build:
+	$(COMPOSE) build
+
+build-no-cache:
 	$(COMPOSE) build --no-cache
 
 up:

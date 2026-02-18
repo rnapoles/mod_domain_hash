@@ -1,13 +1,16 @@
-# Stage 1: Build 
+# syntax=docker/dockerfile:1
+
+# Stage 1: Build
 FROM debian:bullseye-slim AS builder
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
+# Install build dependencies (cached apt lists/archives via BuildKit)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     apache2 \
     apache2-dev \
     build-essential \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+    libssl-dev
 
 WORKDIR /build
 
@@ -15,18 +18,19 @@ WORKDIR /build
 COPY mod_domain_hash.c /build/
 RUN apxs -i -a -c mod_domain_hash.c -lcrypto
 
-# Stage 2: Runtime 
+# Stage 2: Runtime
 FROM debian:bullseye-slim AS runtime
 
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install only runtime dependencies (cached apt lists/archives via BuildKit)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     apache2 \
     libssl1.1 \
     curl \
     mc \
     php \
-    libapache2-mod-php \
-    && rm -rf /var/lib/apt/lists/*
+    libapache2-mod-php
 
 # Copy the compiled module and its load descriptor from the builder stage
 COPY --from=builder /usr/lib/apache2/modules/mod_domain_hash.so \

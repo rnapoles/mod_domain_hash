@@ -7,9 +7,11 @@
  * 
  * Configuration in httpd.conf:
  * LoadModule domain_hash_module modules/mod_domain_hash.so
+ * DomainHashEnable On
  * DomainHashBase /var/sites/sites1
  * DomainHashBase /var/sites/sites2
- * DomainHashEnable On
+ * RedirectMap /path/to/file/rules-map.txt
+ * RedirectMapRoot /var/sites/redirector
  */
 
 #include "httpd.h"
@@ -22,14 +24,22 @@
 #include <openssl/sha.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <regex.h>
 
 module AP_MODULE_DECLARE_DATA domain_hash_module;
+
+/* Forward declarations */
+static apr_status_t load_redirect_patterns(apr_pool_t *pool, const char *filepath, 
+                                           apr_array_header_t **patterns, server_rec *s);
 
 #define MAX_BASE_PATHS 16
 
 typedef struct {
     int enabled;
     apr_array_header_t *base_paths;  /* Array of const char* base paths */
+    const char *redirect_map_file;   /* Path to redirect rules file */
+    const char *redirect_map_root;   /* Document root for redirected requests */
+    apr_array_header_t *redirect_patterns; /* Compiled regex patterns */
 } domain_hash_config;
 
 /* Create per-server configuration */
@@ -38,6 +48,9 @@ static void *create_domain_hash_server_config(apr_pool_t *pool, server_rec *s)
     domain_hash_config *cfg = apr_pcalloc(pool, sizeof(domain_hash_config));
     cfg->enabled = 0;
     cfg->base_paths = apr_array_make(pool, 4, sizeof(const char *));
+    cfg->redirect_map_file = NULL;
+    cfg->redirect_map_root = NULL;
+    cfg->redirect_patterns = NULL;
     return cfg;
 }
 
@@ -58,6 +71,11 @@ static void *merge_domain_hash_server_config(apr_pool_t *pool, void *base_conf, 
     } else {
         cfg->base_paths = apr_array_make(pool, 4, sizeof(const char *));
     }
+    
+    /* Merge redirect map settings */
+    cfg->redirect_map_file = new->redirect_map_file ? new->redirect_map_file : base->redirect_map_file;
+    cfg->redirect_map_root = new->redirect_map_root ? new->redirect_map_root : base->redirect_map_root;
+    cfg->redirect_patterns = new->redirect_patterns ? new->redirect_patterns : base->redirect_patterns;
     
     return cfg;
 }
@@ -85,6 +103,120 @@ static const char *set_domain_hash_base(cmd_parms *cmd, void *dummy, const char 
     *new_path = arg;
     
     return NULL;
+}
+
+static const char *set_redirect_map(cmd_parms *cmd, void *dummy, const char *arg)
+{
+    domain_hash_config *cfg = ap_get_module_config(cmd->server->module_config, &domain_hash_module);
+    cfg->redirect_map_file = arg;
+    return NULL;
+}
+
+static const char *set_redirect_map_root(cmd_parms *cmd, void *dummy, const char *arg)
+{
+    domain_hash_config *cfg = ap_get_module_config(cmd->server->module_config, &domain_hash_module);
+    cfg->redirect_map_root = arg;
+    return NULL;
+}
+
+/* Load and compile redirect patterns from file */
+static apr_status_t load_redirect_patterns(apr_pool_t *pool, const char *filepath, 
+                                           apr_array_header_t **patterns, server_rec *s)
+{
+    apr_file_t *file;
+    apr_status_t rv;
+    char line[1024];
+    regex_t *compiled_regex;
+    int regex_result;
+    char error_buffer[256];
+    
+    if (!filepath || !patterns) {
+        return APR_EINVAL;
+    }
+    
+    /* Open the redirect map file */
+    rv = apr_file_open(&file, filepath, APR_READ | APR_BUFFERED, APR_OS_DEFAULT, pool);
+    if (rv != APR_SUCCESS) {
+        ap_log_error(APLOG_MARK, APLOG_ERR, rv, s,
+                     "mod_domain_hash: Failed to open redirect map file: %s", filepath);
+        return rv;
+    }
+    
+    /* Initialize patterns array */
+    *patterns = apr_array_make(pool, 10, sizeof(regex_t *));
+    
+    /* Read file line by line */
+    while (apr_file_gets(line, sizeof(line), file) == APR_SUCCESS) {
+        char *trimmed = line;
+        size_t len;
+        
+        /* Trim leading whitespace */
+        while (*trimmed && isspace((unsigned char)*trimmed)) {
+            trimmed++;
+        }
+        
+        /* Skip empty lines and comments */
+        if (*trimmed == '\0' || *trimmed == '#') {
+            continue;
+        }
+        
+        /* Trim trailing whitespace and newline */
+        len = strlen(trimmed);
+        while (len > 0 && isspace((unsigned char)trimmed[len - 1])) {
+            trimmed[--len] = '\0';
+        }
+        
+        /* Skip if line became empty after trimming */
+        if (len == 0) {
+            continue;
+        }
+        
+        /* Allocate and compile regex */
+        compiled_regex = apr_palloc(pool, sizeof(regex_t));
+        regex_result = regcomp(compiled_regex, trimmed, REG_EXTENDED | REG_NOSUB);
+        
+        if (regex_result != 0) {
+            regerror(regex_result, compiled_regex, error_buffer, sizeof(error_buffer));
+            ap_log_error(APLOG_MARK, APLOG_WARNING, 0, s,
+                        "mod_domain_hash: Failed to compile regex pattern '%s': %s",
+                        trimmed, error_buffer);
+            continue;
+        }
+        
+        /* Add compiled pattern to array */
+        *(regex_t **)apr_array_push(*patterns) = compiled_regex;
+        
+        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, s,
+                    "mod_domain_hash: Loaded redirect pattern: %s", trimmed);
+    }
+    
+    apr_file_close(file);
+    
+    ap_log_error(APLOG_MARK, APLOG_INFO, 0, s, "mod_domain_hash: Loaded %d redirect patterns from %s", (*patterns)->nelts, filepath);
+    
+    return APR_SUCCESS;
+}
+
+/* Check if URI matches any redirect pattern */
+static int matches_redirect_pattern(const char *uri, apr_array_header_t *patterns)
+{
+    int i;
+    regex_t **pattern_list;
+    
+    if (!uri || !patterns || patterns->nelts == 0) {
+        return 0;
+    }
+    
+    pattern_list = (regex_t **)patterns->elts;
+    
+    for (i = 0; i < patterns->nelts; i++) {
+        int result = regexec(pattern_list[i], uri, 0, NULL, 0);
+        if (result == 0) {
+            return 1;
+        }
+    }
+    
+    return 0;
 }
 
 /* Check if string starts with prefix (safe version) */
@@ -251,6 +383,28 @@ static int domain_hash_translate_name(request_rec *r)
         return DECLINED;
     }
     
+    /* For subrequests and internal redirects, preserve the document root from main request */
+    if (r->main || r->prev) {
+        request_rec *parent = r->main ? r->main : r->prev;
+        const char *redirect_matched = apr_table_get(parent->notes, "REDIRECT_MATCHED");
+        
+        if (!redirect_matched) {
+            redirect_matched = apr_table_get(parent->subprocess_env, "REDIRECT_MATCHED");
+        }
+        
+        if (redirect_matched && strcmp(redirect_matched, "1") == 0) {
+            /* Copy the document root from parent request */
+            const char *parent_docroot = ap_document_root(parent);
+            if (parent_docroot) {
+                ap_set_document_root(r, parent_docroot);
+                ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+                             "mod_domain_hash: Subrequest/internal redirect - preserving document root '%s'",
+                             parent_docroot);
+            }
+            return DECLINED;
+        }
+    }
+    
     /* Get the Host header */
     host = apr_table_get(r->headers_in, "Host");
     
@@ -269,7 +423,7 @@ static int domain_hash_translate_name(request_rec *r)
     if (port) {
         *port = '\0';
     }
-    
+
     /* Convert to lowercase */
     for (i = 0; host_lower[i]; i++) {
         host_lower[i] = tolower((unsigned char)host_lower[i]);
@@ -285,7 +439,7 @@ static int domain_hash_translate_name(request_rec *r)
     /* Try each base path in order until we find one that exists */
     const char **paths = (const char **)cfg->base_paths->elts;
     vhost_path = NULL;
-    
+
     for (i = 0; i < cfg->base_paths->nelts; i++) {
         char *candidate_path = generate_hash_path(r->pool, paths[i], host_lower);
         
@@ -295,7 +449,7 @@ static int domain_hash_translate_name(request_rec *r)
         
         if (directory_exists(candidate_path)) {
             vhost_path = candidate_path;
-            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
+            ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
                           "mod_domain_hash: Found matching directory at '%s'",
                           vhost_path);
             break;
@@ -319,12 +473,6 @@ static int domain_hash_translate_name(request_rec *r)
         vhost_path = public_path;
     }
     
-    /* Set the document root for this request */
-    ap_set_document_root(r, vhost_path);
-    
-    /* Set environment variable */
-    apr_table_set(r->subprocess_env, "VHOST_PATH", vhost_path);
-    
     /* Validate URI to prevent directory traversal attacks */
     if (!is_safe_uri(r->uri)) {
         ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
@@ -339,7 +487,7 @@ static int domain_hash_translate_name(request_rec *r)
     } else {
         r->filename = apr_pstrcat(r->pool, vhost_path, "/", r->uri, NULL);
     }
-    
+
     /* Verify the resolved path is within the document root */
     if (!is_path_within_root(r->filename, vhost_path)) {
         ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
@@ -348,13 +496,73 @@ static int domain_hash_translate_name(request_rec *r)
                       r->filename, vhost_path);
         return HTTP_FORBIDDEN;
     }
+
+    /* Check redirect map first if configured */
+    if (cfg->redirect_map_file && cfg->redirect_map_root && r->uri && cfg->redirect_patterns) {
+        ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
+                     "mod_domain_hash: Checking redirect for URI '%s'", r->uri);
+        
+        /* Check if URI matches any redirect pattern */
+        if (matches_redirect_pattern(r->uri, cfg->redirect_patterns)) {
+            char *redirect_root = (char *)cfg->redirect_map_root;
+            size_t root_len = strlen(redirect_root);
+            
+            ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
+                         "mod_domain_hash: URI '%s' MATCHED redirect pattern", r->uri);
+            
+            /* Remove trailing slash from redirect root if present */
+            if (root_len > 0 && redirect_root[root_len - 1] == '/') {
+                redirect_root = apr_pstrndup(r->pool, redirect_root, root_len - 1);
+            }
+            
+            /* Validate URI for security */
+            if (!is_safe_uri(r->uri)) {
+                ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                             "mod_domain_hash: Rejected unsafe URI in redirect: %s", r->uri);
+                return HTTP_FORBIDDEN;
+            }
+            
+            /* Set document root to redirect map root */
+            ap_set_document_root(r, redirect_root);
+            
+            /* Build filename */
+            r->filename = apr_pstrcat(r->pool, redirect_root, r->uri, NULL);
+            
+            /* Verify path is within redirect root */
+            if (!is_path_within_root(r->filename, redirect_root)) {
+                ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                             "mod_domain_hash: Path traversal attempt in redirect. "
+                             "Filename '%s' is outside redirect root '%s'",
+                             r->filename, redirect_root);
+                return HTTP_FORBIDDEN;
+            }
+            
+            r->canonical_filename = r->filename;
+            
+            /* Set environment variable to mark this as a redirect match */
+            apr_table_set(r->subprocess_env, "REDIRECT_MATCHED", "1");
+            apr_table_set(r->notes, "REDIRECT_MATCHED", "1");
+            
+            ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, 
+                         "mod_domain_hash: URI '%s' matched redirect pattern, "
+                         "using document root '%s', filename '%s'", 
+                         r->uri, redirect_root, r->filename);
+            
+            /* Return OK to complete translation and prevent further processing */
+            return OK;
+        }
+    }
+
+    /* Set the document root for this request */
+    ap_set_document_root(r, vhost_path);
     
+    /* Set environment variable */
+    apr_table_set(r->subprocess_env, "VHOST_PATH", vhost_path);
+
     /* Set canonical filename for proper .htaccess processing */
     r->canonical_filename = r->filename;
-    
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
-                  "mod_domain_hash: Set document root to '%s', filename to '%s'", 
-                  vhost_path, r->filename);
+
+    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, "mod_domain_hash: Set document root to '%s', filename to '%s'", vhost_path, r->filename);
     
     /* Return OK - we've completed the translation */
     return OK;
@@ -366,12 +574,45 @@ static const command_rec domain_hash_directives[] = {
                  "Enable or disable domain hash mapping (On|Off)"),
     AP_INIT_TAKE1("DomainHashBase", set_domain_hash_base, NULL, RSRC_CONF,
                   "Base path for domain hash directories (default: /var/www)"),
+    AP_INIT_TAKE1("RedirectMap", set_redirect_map, NULL, RSRC_CONF,
+                  "Path to redirect rules map file containing regex patterns"),
+    AP_INIT_TAKE1("RedirectMapRoot", set_redirect_map_root, NULL, RSRC_CONF,
+                  "Document root to use when redirect pattern matches"),
     {NULL}
 };
+
+/* Post-config hook to load redirect patterns after configuration is complete */
+static int domain_hash_post_config(apr_pool_t *pconf, apr_pool_t *plog, 
+                                   apr_pool_t *ptemp, server_rec *s)
+{
+    server_rec *server;
+    
+    /* Iterate through all server configurations */
+    for (server = s; server; server = server->next) {
+        domain_hash_config *cfg = ap_get_module_config(server->module_config, &domain_hash_module);
+        
+        /* Load redirect patterns if both file and root are configured */
+        if (cfg && cfg->redirect_map_file && cfg->redirect_map_root && !cfg->redirect_patterns) {
+            apr_status_t rv = load_redirect_patterns(pconf, cfg->redirect_map_file,
+                                                     &cfg->redirect_patterns, server);
+            if (rv != APR_SUCCESS) {
+                ap_log_error(APLOG_MARK, APLOG_ERR, rv, server,
+                            "mod_domain_hash: Failed to load redirect patterns from %s",
+                            cfg->redirect_map_file);
+                return HTTP_INTERNAL_SERVER_ERROR;
+            }
+        }
+    }
+    
+    return OK;
+}
 
 /* Register hooks */
 static void register_hooks(apr_pool_t *pool)
 {
+    /* post_config runs after configuration is complete */
+    ap_hook_post_config(domain_hash_post_config, NULL, NULL, APR_HOOK_MIDDLE);
+    
     /* translate_name runs very early in request processing, before default handler
      * This is where we need to change the document root */
     ap_hook_translate_name(domain_hash_translate_name, NULL, NULL, APR_HOOK_FIRST);

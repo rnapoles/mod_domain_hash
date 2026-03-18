@@ -48,6 +48,7 @@ RUN  mkdir -p /var/www/{example1,example2} && mkdir -p /var/sites/{sites1,sites2
 
 # Enable the module and configure the site
 RUN a2enmod domain_hash \
+    && a2enmod rewrite \
     && a2dissite 000-default \
     && a2ensite domain-hash
 

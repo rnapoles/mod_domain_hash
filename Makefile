@@ -18,6 +18,7 @@ help:
 	@echo "  save           Tag and save the image as $(IMAGE) to mod_domain_hash.tar"
 	@echo "  build-no-cache  Force a full rebuild, ignoring all caches"
 	@echo "  up       Start the container in detached mode"
+	@echo "  up-build Build the Docker image && Start the container in detached mode"
 	@echo "  down     Stop and remove the container"
 	@echo "  restart  Restart the container"
 	@echo "  logs     Tail Apache logs"
@@ -37,6 +38,9 @@ build-no-cache:
 
 up:
 	$(COMPOSE) up -d
+
+up-build:
+	$(COMPOSE) up -d --build
 
 down:
 	$(COMPOSE) down

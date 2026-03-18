@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   apache:
     build: .
@@ -9,6 +7,7 @@ services:
     volumes:
       - ./mod_domain_hash.c:/build/mod_domain_hash.c:ro
       - ./var/sites/:/var/sites/
+      - ./var/redirector/:/var/redirector/
       - ./var/www/:/var/www/
     environment:
       - APACHE_LOG_DIR=/var/log/apache2

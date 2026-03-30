@@ -536,7 +536,8 @@ static int domain_hash_translate_name(request_rec *r)
                              r->filename, redirect_root);
                 return HTTP_FORBIDDEN;
             }
-            
+
+            /* Set canonical filename for proper .htaccess processing */
             r->canonical_filename = r->filename;
             
             /* Set environment variable to mark this as a redirect match */

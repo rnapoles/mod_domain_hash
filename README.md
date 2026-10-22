@@ -9,8 +9,8 @@ This Docker setup allows you to test the `mod_domain_hash` Apache module in an i
 ├── Dockerfile              # Docker image definition
 ├── docker-compose.yml      # Docker Compose configuration
 ├── mod_domain_hash.c       # Apache module source code
-├── test.sh                 # Test script to verify functionality
-└── README.md              # This file
+├── test_script.sh          # Test script to verify functionality
+└── README.md               # This file
 ```
 
 ## Prerequisites
@@ -35,10 +35,10 @@ docker-compose ps
 
 ```bash
 # Make test script executable
-chmod +x test.sh
+chmod +x test_script.sh
 
 # Run the test script
-./test.sh
+./test_script.sh
 ```
 
 ### 3. Alternative: Test manually

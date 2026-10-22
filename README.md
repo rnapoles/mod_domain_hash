@@ -35,10 +35,10 @@ docker-compose ps
 
 ```bash
 # Make test script executable
-chmod +x test.sh
+chmod +x test_script.sh
 
 # Run the test script
-./test.sh
+./test_script.sh
 ```
 
 ### 3. Alternative: Test manually
